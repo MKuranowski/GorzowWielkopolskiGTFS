@@ -3,15 +3,16 @@
 
 import argparse
 import logging
-from collections.abc import Iterator
+from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
 import requests
-from impuls import App, PipelineOptions
+from impuls import App, PipelineOptions, Task, TaskRuntime
 from impuls.errors import InputNotModified
 from impuls.pipeline import Pipeline
 from impuls.resource import DATETIME_MIN_UTC, ConcreteResource
@@ -153,6 +154,31 @@ class GorzowGTFSResource(ConcreteResource):
                 yield chunk
 
 
+class MergeDuplicateRoutes(Task):
+    def execute(self, r: TaskRuntime) -> None:
+        routes_by_short_name = defaultdict[str, list[str]](list)
+        for route_id, short_name in cast(
+            Iterable[tuple[str, str]],
+            r.db.raw_execute("SELECT route_id, short_name FROM routes"),
+        ):
+            routes_by_short_name[short_name].append(route_id)
+
+        with r.db.transaction():
+            for route_ids in routes_by_short_name.values():
+                route_ids.sort()
+                primary = route_ids[0]
+                secondaries = route_ids[1:]
+
+                r.db.raw_execute_many(
+                    "UPDATE trips SET route_id = ? WHERE route_id = ?",
+                    ((primary, secondary) for secondary in secondaries),
+                )
+                r.db.raw_execute_many(
+                    "DELETE FROM routes WHERE route_id = ?",
+                    ((secondary,) for secondary in secondaries),
+                )
+
+
 class GorzowGTFS(App):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
@@ -179,7 +205,7 @@ class GorzowGTFS(App):
                 ),
                 ExecuteSQL(
                     statement="UPDATE stops SET name = re_sub('\"{2,}', '\"', name)",
-                    task_name="FixDoubleQuotesInStopNames",
+                    task_name="FixDoubleQuotesInStopName",
                 ),
                 ExecuteSQL(
                     statement=(
@@ -187,6 +213,27 @@ class GorzowGTFS(App):
                         "WHERE name = 'Fieldorfa\"Nila\"'"
                     ),
                     task_name="FixFieldorfaNilaStopName",
+                ),
+                MergeDuplicateRoutes(),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE routes SET color = CASE "
+                        "  WHEN type = 0 THEN '339966'"
+                        "  WHEN short_name LIKE '5__' THEN '000000'"
+                        "  ELSE 'B8D434'"
+                        "END"
+                    ),
+                    task_name="UpdateRouteColor",
+                ),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE routes SET text_color = iif(color = 'B8D434', '000000', 'FFFFFF')"
+                    ),
+                    task_name="UpdateRouteTextColor",
+                ),
+                ExecuteSQL(
+                    statement="UPDATE routes SET long_name = ''",
+                    task_name="ClearRouteLongName",
                 ),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output),
             ],
