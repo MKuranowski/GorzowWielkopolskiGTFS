@@ -235,6 +235,13 @@ class GorzowGTFS(App):
                     statement="UPDATE routes SET long_name = ''",
                     task_name="ClearRouteLongName",
                 ),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE feed_info SET publisher_name = 'Mikołaj Kuranowski', "
+                        "publisher_url = 'https://mkuran.pl/gtfs/'"
+                    ),
+                    task_name="UpdateFeedInfo",
+                ),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output),
             ],
         )
