@@ -15,7 +15,8 @@ from impuls import App, PipelineOptions
 from impuls.errors import InputNotModified
 from impuls.pipeline import Pipeline
 from impuls.resource import DATETIME_MIN_UTC, ConcreteResource
-from impuls.tasks import LoadGTFS, SaveGTFS
+from impuls.tasks import ExtendCalendarsFromPolishExceptions, LoadGTFS, SaveGTFS, SimplifyCalendars
+from impuls.tools import polish_calendar_exceptions
 
 LIST_URL = "https://bip.mzk-gorzow.com.pl/gtfs.html"
 USER_AGENT = "Mozilla/5.0 (compatible; MSIE 7.0; Windows 95; Trident/3.0)"
@@ -159,10 +160,17 @@ class GorzowGTFS(App):
         return Pipeline(
             options=options,
             resources={
+                "calendar_exceptions.csv": polish_calendar_exceptions.RESOURCE,
                 "gorzow_wlkp.zip": GorzowGTFSResource(),
             },
             tasks=[
                 LoadGTFS("gorzow_wlkp.zip"),
+                SimplifyCalendars(generate_new_ids=False),
+                ExtendCalendarsFromPolishExceptions(
+                    resource_name="calendar_exceptions.csv",
+                    region=polish_calendar_exceptions.PolishRegion.LUBUSKIE,
+                    duration_days=90,
+                ),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output),
             ],
         )
