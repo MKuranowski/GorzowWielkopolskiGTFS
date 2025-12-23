@@ -15,7 +15,13 @@ from impuls import App, PipelineOptions
 from impuls.errors import InputNotModified
 from impuls.pipeline import Pipeline
 from impuls.resource import DATETIME_MIN_UTC, ConcreteResource
-from impuls.tasks import ExtendCalendarsFromPolishExceptions, LoadGTFS, SaveGTFS, SimplifyCalendars
+from impuls.tasks import (
+    ExecuteSQL,
+    ExtendCalendarsFromPolishExceptions,
+    LoadGTFS,
+    SaveGTFS,
+    SimplifyCalendars,
+)
 from impuls.tools import polish_calendar_exceptions
 
 LIST_URL = "https://bip.mzk-gorzow.com.pl/gtfs.html"
@@ -170,6 +176,17 @@ class GorzowGTFS(App):
                     resource_name="calendar_exceptions.csv",
                     region=polish_calendar_exceptions.PolishRegion.LUBUSKIE,
                     duration_days=90,
+                ),
+                ExecuteSQL(
+                    statement="UPDATE stops SET name = re_sub('\"{2,}', '\"', name)",
+                    task_name="FixDoubleQuotesInStopNames",
+                ),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE stops SET name = 'Fieldorfa \"Nila\"' "
+                        "WHERE name = 'Fieldorfa\"Nila\"'"
+                    ),
+                    task_name="FixFieldorfaNilaStopName",
                 ),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output),
             ],
