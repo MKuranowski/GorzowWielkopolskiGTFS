@@ -8,7 +8,7 @@ from files published at <https://bip.mzk-gorzow.com.pl/gtfs.html>.
 Running
 -------
 
-GZM GTFS is written in Python with the [Impuls framework](https://github.com/MKuranowski/Impuls).
+GorzowWielkopolskiGTFS is written in Python with the [Impuls framework](https://github.com/MKuranowski/Impuls).
 
 To set up the project, run:
 
