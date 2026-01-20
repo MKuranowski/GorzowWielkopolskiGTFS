@@ -1,15 +1,22 @@
-# SPDX-FileCopyrightText: 2025 Mikołaj Kuranowski
+# SPDX-FileCopyrightText: 2025-2026 Mikołaj Kuranowski
 # SPDX-License-Identifier: MIT
 
 import argparse
+import csv
+import io
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from html.parser import HTMLParser
+from itertools import groupby
+from operator import itemgetter
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, cast
 from urllib.parse import urljoin, urlparse
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import requests
 from impuls import App, PipelineOptions, Task, TaskRuntime
@@ -154,6 +161,67 @@ class GorzowGTFSResource(ConcreteResource):
                 yield chunk
 
 
+class FixStopSequence(Task):
+    def __init__(self, gtfs_resource: str) -> None:
+        super().__init__()
+        self.gtfs_resource = gtfs_resource
+
+    def execute(self, r: TaskRuntime) -> None:
+        zip_path = r.resources[self.gtfs_resource].stored_at
+        with TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            self.extract_gtfs(temp_dir, zip_path)
+            self.fixup_file(temp_dir / "stop_times.txt")
+            self.compress_gtfs(zip_path, temp_dir)
+
+    def extract_gtfs(self, dst: Path, src: Path) -> None:
+        self.logger.info("Extracting %s", src.name)
+        with ZipFile(src, "r") as arch:
+            to_extract = filter(
+                lambda f: "/" not in f.filename and f.filename.endswith(".txt"),
+                arch.infolist(),
+            )
+            arch.extractall(dst, to_extract)
+
+    def compress_gtfs(self, dst: Path, src: Path) -> None:
+        self.logger.info("Updating %s", dst.name)
+        with ZipFile(dst, "w", ZIP_DEFLATED) as arch:
+            for f in src.iterdir():
+                if f.is_file() and f.suffix == ".txt":
+                    arch.write(f, f.name)
+
+    def fixup_file(self, file: Path) -> None:
+        self.logger.info("Fixing %s", file.name)
+        old_content = file.read_text(encoding="utf-8-sig", newline="")
+        new_content = self.fixup_file_content(old_content)
+        file.write_text(new_content, encoding="utf-8", newline="")
+
+    def fixup_file_content(self, old: str) -> str:
+        # Read the old file
+        reader = csv.DictReader(io.StringIO(old, newline=""))
+        if reader.fieldnames is None or "stop_sequence" in reader.fieldnames:
+            self.logger.warning("stop_sequence already present, skipping")
+            return old
+
+        # Order all rows by (trip_id, departure_time).
+        # Since Python's `sort` is stable, if there are two stop-times with the same
+        # time, we're keeping the original ordering.
+        rows = list(reader)
+        rows.sort(key=itemgetter("trip_id", "departure_time"))
+
+        # Assign stop_sequence
+        for _, trip_rows in groupby(rows, key=itemgetter("trip_id")):
+            for idx, row in enumerate(trip_rows):
+                row["stop_sequence"] = str(idx)
+
+        # Write the new file
+        new_buf = io.StringIO(newline="")
+        writer = csv.DictWriter(new_buf, fieldnames=[*reader.fieldnames, "stop_sequence"])
+        writer.writeheader()
+        writer.writerows(rows)
+        return new_buf.getvalue()
+
+
 class MergeDuplicateRoutes(Task):
     def execute(self, r: TaskRuntime) -> None:
         routes_by_short_name = defaultdict[str, list[str]](list)
@@ -196,6 +264,7 @@ class GorzowGTFS(App):
                 "gorzow_wlkp.zip": GorzowGTFSResource(),
             },
             tasks=[
+                FixStopSequence("gorzow_wlkp.zip"),
                 LoadGTFS("gorzow_wlkp.zip"),
                 SimplifyCalendars(generate_new_ids=False),
                 ExtendCalendarsFromPolishExceptions(
