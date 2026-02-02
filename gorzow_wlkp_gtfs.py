@@ -86,7 +86,7 @@ class LinkScraper(HTMLParser):
                 href = v
 
         # Ignore link to non-gtfs files
-        if "/download/" not in href or "gtfs_gw.zip" not in href:
+        if "/download/" not in href or "gtfs" not in href or "zip" not in href:
             return
 
         # Save the link
